@@ -1,0 +1,365 @@
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "sync"
+)
+
+// User represents a user record.
+type User struct {
+    ID         int
+    SecretCode string
+    Name       string
+    Email      string
+    Playlists  []Playlist
+}
+
+// Playlist represents a playlist with a list of songs.
+type Playlist struct {
+    ID    int
+    Name  string
+    Songs []Song
+}
+
+// Song represents a song in a playlist.
+type Song struct {
+    ID       int
+    Name     string
+    Composers []string
+    MusicURL string
+}
+
+// Database to store users, playlists, and songs.
+var database struct {
+    sync.Mutex
+    Users []User
+}
+
+func main() {
+    // Initialize the database with some sample data.
+    // This is just for demonstration; you should use a real database.
+    database.Users = []User{
+        {
+            ID:         1,
+            SecretCode: "abc123",
+            Name:       "User1",
+            Email:      "vivekkushwaha563483@gmail.com",
+            Playlists: []Playlist{
+                {
+                    ID:   1,
+                    Name: "My Playlist",
+                    Songs: []Song{
+                        {
+                            ID:       1,
+                            Name:     "Song 1",
+                            Composers: []string{"Composer 1"},
+                            MusicURL: "https://example.com/song1.mp3",
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    http.HandleFunc("/flogin", floginHandler)
+    http.HandleFunc("/Iregister", iregisterHandler)
+    http.HandleFunc("/ViewProfile", viewProfileHandler)
+    http.HandleFunc("/getAllSongsOfPlaylist", getAllSongsOfPlaylistHandler)
+    http.HandleFunc("/createPlaylist", createPlaylistHandler)
+    http.HandleFunc("/addSongToPlaylist", addSongToPlaylistHandler)
+    http.HandleFunc("/deleteSongFromPlaylist", deleteSongFromPlaylistHandler)
+    http.HandleFunc("/deletePlaylist", deletePlaylistHandler)
+    http.HandleFunc("/getSongDetail", getSongDetailHandler)
+
+    // Start the HTTP server.
+    if err := http.ListenAndServe(":8080", nil); err != nil {
+        fmt.Println("Server error:", err)
+    }
+}
+
+func jsonResponse(w http.ResponseWriter, data interface{}) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusOK)
+    if err := json.NewEncoder(w).Encode(data); err != nil {
+        http.Error(w, "Internal server error", http.StatusInternalServerError)
+    }
+}
+func getSongDetailHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse the request to get the song ID.
+    songID := r.URL.Query().Get("songID")
+
+    if songID == "" {
+        http.Error(w, "Song ID is required", http.StatusBadRequest)
+        return
+    }
+
+    // Search for the song with the given ID.
+    userIndex, playlistIndex, songIndex, found := findSongByID(songID)
+    if !found {
+        http.Error(w, "Song not found", http.StatusNotFound)
+        return
+    }
+
+    // Retrieve the song details.
+    song := database.Users[userIndex].Playlists[playlistIndex].Songs[songIndex]
+
+    // Return the song details as JSON.
+    jsonResponse(w, song)
+}
+
+func findSongByID(songID string) (int, int, int, bool) {
+    for u, user := range database.Users {
+        for p, playlist := range user.Playlists {
+            for s, song := range playlist.Songs {
+                if song.ID == songID {
+                    return u, p, s, true
+                }
+            }
+        }
+    }
+    return 0, 0, 0, false
+}
+func deletePlaylistHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse the request to get the user ID and playlist ID.
+    userID := r.URL.Query().Get("userID")
+    playlistID := r.URL.Query().Get("playlistID")
+
+    if userID == "" || playlistID == "" {
+        http.Error(w, "User ID and Playlist ID are required", http.StatusBadRequest)
+        return
+    }
+
+    // Search for the user with the given ID.
+    userIndex, found := findUserByID(userID)
+    if !found {
+        http.Error(w, "User not found", http.StatusNotFound)
+        return
+    }
+
+    // Search for the playlist with the given ID within the user's playlists.
+    playlistIndex, found := findPlaylistByID(userIndex, playlistID)
+    if !found {
+        http.Error(w, "Playlist not found", http.StatusNotFound)
+        return
+    }
+
+    // Remove the playlist from the user's playlists.
+    user := &database.Users[userIndex]
+    user.Playlists = append(user.Playlists[:playlistIndex], user.Playlists[playlistIndex+1:]...)
+
+    // Return a success response.
+    w.WriteHeader(http.StatusOK)
+}
+func floginHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse the request to get the user's secret code.
+    secretCode := r.URL.Query().Get("secretCode")
+
+    if secretCode == "" {
+        http.Error(w, "Secret code is required", http.StatusBadRequest)
+        return
+    }
+
+    // Search for the user with the provided secret code in your data structure or database.
+    user, found := findUserBySecretCode(secretCode)
+
+    if !found {
+        http.Error(w, "User not found", http.StatusNotFound)
+        return
+    }
+
+    // Return user details as a JSON response.
+    jsonResponse(w, user)
+}
+func iregisterHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse the request to get the user's name and email.
+    name := r.URL.Query().Get("name")
+    email := r.URL.Query().Get("email")
+
+    if name == "" || email == "" {
+        http.Error(w, "Name and email are required", http.StatusBadRequest)
+        return
+    }
+
+    // Generate a unique user ID and secret code for the new user.
+    userID := generateUniqueUserID()
+    secretCode := generateUniqueSecretCode()
+
+    // Create a new user record.
+    newUser := User{
+        ID:         userID,
+        SecretCode: secretCode,
+        Name:       name,
+        Email:      email,
+    }
+
+    // Add the new user to your data structure or database.
+    addUser(newUser)
+
+    // Return the complete details of the newly created user as a JSON response.
+    jsonResponse(w, newUser)
+}
+func deleteSongFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse the request to get the user ID, playlist ID, and song ID.
+    userID := r.URL.Query().Get("userID")
+    playlistID := r.URL.Query().Get("playlistID")
+    songID := r.URL.Query().Get("songID")
+
+    if userID == "" || playlistID == "" || songID == "" {
+        http.Error(w, "User ID, Playlist ID, and Song ID are required", http.StatusBadRequest)
+        return
+    }
+
+    // Search for the user with the provided user ID in your data structure or database.
+    user, found := findUserByID(userID)
+
+    if !found {
+        http.Error(w, "User not found", http.StatusNotFound)
+        return
+    }
+
+    // Search for the playlist with the provided playlist ID within the user's playlists.
+    playlist, found := findPlaylistByID(user, playlistID)
+
+    if !found {
+        http.Error(w, "Playlist not found", http.StatusNotFound)
+        return
+    }
+
+    // Search for the song with the provided song ID within the playlist.
+    songIndex, found := findSongInPlaylist(playlist, songID)
+
+    if !found {
+        http.Error(w, "Song not found in the playlist", http.StatusNotFound)
+        return
+    }
+
+    // Remove the song from the playlist.
+    playlist.Songs = append(playlist.Songs[:songIndex], playlist.Songs[songIndex+1:]...)
+
+    // Return a success response.
+    w.WriteHeader(http.StatusOK)
+}
+func addSongToPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse the request to get the user ID, playlist ID, and song details.
+    userID := r.URL.Query().Get("userID")
+    playlistID := r.URL.Query().Get("playlistID")
+    songName := r.URL.Query().Get("songName")
+    composers := r.URL.Query()["composers"]
+    musicURL := r.URL.Query().Get("musicURL")
+
+    if userID == "" || playlistID == "" || songName == "" || musicURL == "" {
+        http.Error(w, "User ID, Playlist ID, Song Name, and Music URL are required", http.StatusBadRequest)
+        return
+    }
+
+    // Search for the user with the provided user ID in your data structure or database.
+    user, found := findUserByID(userID)
+
+    if !found {
+        http.Error(w, "User not found", http.StatusNotFound)
+        return
+    }
+
+    // Search for the playlist with the provided playlist ID within the user's playlists.
+    playlist, found := findPlaylistByID(user, playlistID)
+
+    if !found {
+        http.Error(w, "Playlist not found", http.StatusNotFound)
+        return
+    }
+
+    // Create a new song and add it to the specified playlist.
+    newSong := Song{
+        ID:       generateUniqueSongID(),
+        Name:     songName,
+        Composers: composers,
+        MusicURL: musicURL,
+    }
+
+    playlist.Songs = append(playlist.Songs, newSong)
+
+    // Return the complete details of the newly added song as a JSON response.
+    jsonResponse(w, newSong)
+}
+func createPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse the request to get the user ID and playlist details.
+    userID := r.URL.Query().Get("userID")
+    playlistName := r.URL.Query().Get("name")
+
+    if userID == "" || playlistName == "" {
+        http.Error(w, "User ID and Playlist Name are required", http.StatusBadRequest)
+        return
+    }
+
+    // Search for the user with the provided user ID in your data structure or database.
+    user, found := findUserByID(userID)
+
+    if !found {
+        http.Error(w, "User not found", http.StatusNotFound)
+        return
+    }
+
+    // Create a new playlist and add it to the user's playlists.
+    newPlaylist := Playlist{
+        ID:   generateUniquePlaylistID(),
+        Name: playlistName,
+    }
+
+    user.Playlists = append(user.Playlists, newPlaylist)
+
+    // Return the complete details of the newly created playlist as a JSON response.
+    jsonResponse(w, newPlaylist)
+}
+func getAllSongsOfPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse the request to get the user ID and playlist ID.
+    userID := r.URL.Query().Get("userID")
+    playlistID := r.URL.Query().Get("playlistID")
+
+    if userID == "" || playlistID == "" {
+        http.Error(w, "User ID and Playlist ID are required", http.StatusBadRequest)
+        return
+    }
+
+    // Search for the user with the provided user ID in your data structure or database.
+    user, found := findUserByID(userID)
+
+    if !found {
+        http.Error(w, "User not found", http.StatusNotFound)
+        return
+    }
+
+    // Search for the playlist with the provided playlist ID within the user's playlists.
+    playlist, found := findPlaylistByID(user, playlistID)
+
+    if !found {
+        http.Error(w, "Playlist not found", http.StatusNotFound)
+        return
+    }
+
+    // Return all of the songs in the playlist as a JSON response.
+    jsonResponse(w, playlist.Songs)
+}
+func viewProfileHandler(w http.ResponseWriter, r *http.Request) {
+    // Parse the request to get the user ID.
+    userID := r.URL.Query().Get("userID")
+
+    if userID == "" {
+        http.Error(w, "User ID is required", http.StatusBadRequest)
+        return
+    }
+
+    // Search for the user with the provided user ID in your data structure or database.
+    user, found := findUserByID(userID)
+
+    if !found {
+        http.Error(w, "User not found", http.StatusNotFound)
+        return
+    }
+
+    // Return all of the user's playlists as a JSON response.
+    jsonResponse(w, user.Playlists)
+}
+
+
